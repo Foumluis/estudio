@@ -1025,3 +1025,28 @@ label > span {
   font-weight: 600;
   cursor: pointer;
 }
+
+/* ---------- editar duración ---------- */
+
+.duration-edit {
+  display: grid;
+  gap: 10px;
+}
+.quick-subtract {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.btn.pill {
+  padding: 5px 11px;
+  font-size: 0.82rem;
+  border-radius: 999px;
+  border-color: var(--border);
+}
+.entry-actions {
+  gap: 4px;
+}
+.edited {
+  font-style: italic;
+}

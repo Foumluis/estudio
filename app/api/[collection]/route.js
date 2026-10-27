@@ -78,6 +78,28 @@ function canDelete(collection, item, user) {
   return !item.createdBy || item.createdBy === user.id;
 }
 
+async function sessionPatch(body) {
+  const patch = {};
+  if ("seconds" in body) {
+    const seconds = Math.round(Number(body.seconds));
+    if (!(seconds >= 60 && seconds <= 24 * 3600)) {
+      throw new HttpError("La sesión debe durar entre 1 minuto y 24 horas.");
+    }
+    patch.seconds = seconds;
+  }
+  if ("title" in body) {
+    patch.title = str(body.title, 120);
+    if (!patch.title) throw new HttpError("El título es obligatorio.");
+  }
+  if ("notes" in body) patch.notes = str(body.notes, 5000);
+  if ("subjectId" in body) {
+    if (!(await exists("subjects", body.subjectId))) throw new HttpError("Ramo no válido.");
+    patch.subjectId = body.subjectId;
+  }
+  if (!Object.keys(patch).length) throw new HttpError("Nada que actualizar.");
+  return { ...patch, editedAt: new Date().toISOString() };
+}
+
 // Campos editables después de crear.
 function patchFor(collection, item, body, user) {
   if (collection === "people" && "dailyGoalHours" in body) {
@@ -85,6 +107,10 @@ function patchFor(collection, item, body, user) {
     return { dailyGoalHours: dailyGoal(body.dailyGoalHours) };
   }
   if (collection === "goals" && "done" in body) return { done: Boolean(body.done) };
+  if (collection === "sessions") {
+    if (item.personId !== user.id) throw new HttpError("Solo puedes editar tus propias sesiones.", 403);
+    return sessionPatch(body);
+  }
   throw new HttpError("Nada que actualizar.");
 }
 
@@ -120,7 +146,7 @@ export async function PATCH(req, { params }) {
   return handle(params, async (collection, user) => {
     const item = await findTarget(req, collection);
     const body = await req.json().catch(() => ({}));
-    return update(collection, item.id, patchFor(collection, item, body, user));
+    return update(collection, item.id, await patchFor(collection, item, body, user));
   });
 }
 

@@ -226,7 +226,9 @@ function App({ me, setMe }) {
             </>
           )}
           {tab === "goals" && <Goals data={data} me={self} mutate={mutate} />}
-          {tab === "log" && <Log data={data} me={self} mutate={mutate} />}
+          {tab === "log" && (
+            <Log data={data} me={self} mutate={mutate} onEdit={(s) => setModal({ ...s, mode: "edit" })} />
+          )}
           {tab === "setup" && <Setup data={data} me={self} mutate={mutate} onLeave={() => setMe(null)} />}
         </main>
       )}
@@ -238,7 +240,10 @@ function App({ me, setMe }) {
           initial={modal}
           onClose={() => setModal(null)}
           onSave={async (session) => {
-            const ok = await mutate("/api/sessions", { method: "POST", body: session }, "Sesión guardada ✓");
+            const ok =
+              modal.mode === "edit"
+                ? await mutate(`/api/sessions?id=${modal.id}`, { method: "PATCH", body: session }, "Sesión actualizada ✓")
+                : await mutate("/api/sessions", { method: "POST", body: session }, "Sesión guardada ✓");
             if (ok) {
               if (modal.mode === "timer") {
                 const t = readTimer();
@@ -537,7 +542,7 @@ function Progress({ data, me, onManual, goSetup }) {
 
 // ---------- bitácora ----------
 
-function Log({ data, me, mutate }) {
+function Log({ data, me, mutate, onEdit }) {
   const [person, setPerson] = useState("");
   const [subject, setSubject] = useState("");
   const [open, setOpen] = useState(null);
@@ -592,6 +597,7 @@ function Log({ data, me, mutate }) {
                     <h3>{s.title}</h3>
                     <p className="muted small">
                       {personById[s.personId]?.name ?? "—"} · {dateFmt.format(new Date(s.date))}
+                      {s.editedAt && <span className="edited"> · editada</span>}
                     </p>
                   </div>
                   <span className="chip" style={{ background: subj?.color }}>
@@ -602,6 +608,9 @@ function Log({ data, me, mutate }) {
                 {s.notes && <p className={expanded ? "notes" : "notes clamp"}>{s.notes}</p>}
                 {expanded && s.personId === me.id && (
                   <div className="entry-actions">
+                    <button className="btn ghost" onClick={() => onEdit(s)}>
+                      Editar
+                    </button>
                     <button
                       className="btn ghost danger"
                       onClick={() =>
@@ -764,13 +773,23 @@ function Setup({ data, me, mutate, onLeave }) {
 
 // ---------- modal de sesión ----------
 
+const MODAL_TEXT = {
+  timer: { title: "¿Qué estudiaste?", cancel: "Seguir después", save: "Guardar sesión" },
+  manual: { title: "Registrar sesión", cancel: "Cancelar", save: "Guardar sesión" },
+  edit: { title: "Editar sesión", cancel: "Cancelar", save: "Guardar cambios" },
+};
+
 function SessionModal({ data, me, initial, onClose, onSave }) {
-  const manual = initial.mode === "manual";
+  const { mode } = initial;
+  const text = MODAL_TEXT[mode];
+  const startSecs = mode === "manual" ? 3600 : initial.seconds;
   const [subjectId, setSubjectId] = useState(initial.subjectId || data.subjects[0]?.id || "");
-  const [hours, setHours] = useState("1");
-  const [minutes, setMinutes] = useState("0");
-  const [title, setTitle] = useState("");
-  const [notes, setNotes] = useState("");
+  const [hours, setHours] = useState(String(Math.floor(startSecs / 3600)));
+  const [minutes, setMinutes] = useState(String(Math.floor((startSecs % 3600) / 60)));
+  // Mientras no se toque la duración, se guardan los segundos exactos medidos.
+  const [durationTouched, setDurationTouched] = useState(false);
+  const [title, setTitle] = useState(initial.title || "");
+  const [notes, setNotes] = useState(initial.notes || "");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -779,8 +798,19 @@ function SessionModal({ data, me, initial, onClose, onSave }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const seconds = manual ? (Number(hours) || 0) * 3600 + (Number(minutes) || 0) * 60 : initial.seconds;
+  const seconds = durationTouched
+    ? (Number(hours) || 0) * 3600 + (Number(minutes) || 0) * 60
+    : startSecs;
   const tooShort = seconds < 60;
+  const tooLong = seconds > 24 * 3600;
+  const removed = startSecs - seconds;
+
+  const setDuration = (secs) => {
+    const clamped = Math.max(0, secs);
+    setHours(String(Math.floor(clamped / 3600)));
+    setMinutes(String(Math.floor((clamped % 3600) / 60)));
+    setDurationTouched(true);
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -792,40 +822,87 @@ function SessionModal({ data, me, initial, onClose, onSave }) {
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <form className="card modal" onSubmit={submit}>
-        <h2>{manual ? "Registrar sesión" : "¿Qué estudiaste?"}</h2>
+        <h2>{text.title}</h2>
 
-        {manual ? (
-          <>
-            <label>
-              <span>Ramo</span>
-              <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
-                {data.subjects.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="row">
-              <label>
-                <span>Horas</span>
-                <input type="number" min="0" max="24" value={hours} onChange={(e) => setHours(e.target.value)} />
-              </label>
-              <label>
-                <span>Minutos</span>
-                <input type="number" min="0" max="59" value={minutes} onChange={(e) => setMinutes(e.target.value)} />
-              </label>
-            </div>
-          </>
-        ) : (
+        {mode === "timer" ? (
           <p className="summary">
             <span className="chip" style={{ background: data.subjects.find((s) => s.id === subjectId)?.color }}>
               {data.subjects.find((s) => s.id === subjectId)?.name}
             </span>
-            <b>{fmtClock(seconds)}</b>
+            <span className="muted">Medido:</span>
+            <b>{fmtClock(startSecs)}</b>
             <span className="muted">· {me.name}</span>
           </p>
+        ) : (
+          <label>
+            <span>Ramo</span>
+            <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
+              {data.subjects.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
+
+        <div className="duration-edit">
+          <div className="row">
+            <label>
+              <span>Horas</span>
+              <input
+                type="number"
+                min="0"
+                max="24"
+                value={hours}
+                onChange={(e) => {
+                  setHours(e.target.value);
+                  setDurationTouched(true);
+                }}
+              />
+            </label>
+            <label>
+              <span>Minutos</span>
+              <input
+                type="number"
+                min="0"
+                max="59"
+                value={minutes}
+                onChange={(e) => {
+                  setMinutes(e.target.value);
+                  setDurationTouched(true);
+                }}
+              />
+            </label>
+          </div>
+          {mode !== "manual" && (
+            <div className="quick-subtract">
+              <span className="muted small">¿Se te olvidó pausar? Restar:</span>
+              {[5, 15, 30, 60].map((m) => (
+                <button type="button" key={m} className="btn ghost pill" onClick={() => setDuration(seconds - m * 60)}>
+                  −{m < 60 ? `${m} min` : "1 h"}
+                </button>
+              ))}
+              {durationTouched && (
+                <button
+                  type="button"
+                  className="btn ghost pill"
+                  onClick={() => {
+                    setDuration(startSecs);
+                    setDurationTouched(false);
+                  }}
+                >
+                  Deshacer
+                </button>
+              )}
+            </div>
+          )}
+          {mode !== "manual" && removed > 0 && (
+            <p className="muted small">
+              Se guardará {fmtDur(seconds)} (le quitaste {fmtDur(removed)}).
+            </p>
+          )}
+        </div>
 
         <label>
           <span>Título</span>
@@ -850,13 +927,14 @@ function SessionModal({ data, me, initial, onClose, onSave }) {
         </label>
 
         {tooShort && <p className="warn small">La sesión debe durar al menos 1 minuto para guardarse.</p>}
+        {tooLong && <p className="warn small">La sesión no puede durar más de 24 horas.</p>}
 
         <div className="modal-actions">
           <button type="button" className="btn ghost" onClick={onClose}>
-            {manual ? "Cancelar" : "Seguir después"}
+            {text.cancel}
           </button>
-          <button className="btn primary" disabled={saving || tooShort || !title.trim()}>
-            {saving ? "Guardando…" : "Guardar sesión"}
+          <button className="btn primary" disabled={saving || tooShort || tooLong || !title.trim()}>
+            {saving ? "Guardando…" : text.save}
           </button>
         </div>
       </form>
